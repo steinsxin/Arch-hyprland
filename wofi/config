@@ -1,4 +1,5 @@
 ## Wofi Config
+colors=colors
 
 ## General
 show=drun
