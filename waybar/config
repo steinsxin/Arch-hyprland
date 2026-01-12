@@ -1,0 +1,66 @@
+{
+  "layer": "top",
+  "position": "top",
+  "height": 32,
+  "spacing": 4,
+  "modules-left": ["custom/launch", "wlr/workspaces"],
+  "modules-center": ["clock"],
+  "modules-right": ["cpu", "memory", "network", "pulseaudio", "battery", "tray", "custom/power"],
+
+  "wlr/workspaces": {
+    "format": "{name}",
+    "on-click": "activate",
+    "persistent_workspaces": {
+      "1": [], "2": [], "3": [], "4": [], "5": []
+    }
+  },
+  "cpu": {
+    "format": "  {usage}%",
+    "tooltip": false
+  },
+  "memory": {
+    "interval": 5,
+    "format": "󰔠 {}%"
+  },
+  "network": {
+    "format-wifi": "  {essid}",
+    "format-ethernet": "Ethernet Wired",
+    "format-disconnected": "⚠ Offline",
+    "tooltip": false
+  },
+  "pulseaudio": {
+    "format": "{icon}  {volume}%",
+    "format-icons": {
+      "headphones": "",
+      "default": ["", "", ""]
+    },
+    "on-click": "pavucontrol"
+  },
+  "battery": {
+    "format": "{icon} {capacity}%",
+    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "states": {
+      "warning": 20,
+      "critical": 10
+    },
+    "state-warn": "#ff9e64",
+    "state-critical": "#f7768e"
+  },
+  "clock": {
+    "format": "󰃰  {:%H:%M}",
+    "format-alt": "󰃰  {:%Y-%m-%d :%H:%M}"
+  },
+  "tray": {
+    "icon-size": 18,
+    "spacing": 8,
+    "show-passive-items": false
+  },
+  "custom/launch": {
+    "format": "󰣇",
+    "on-click": "wofi --show drun --allow-images"
+  },
+  "custom/power": {
+    "format": "⏻",
+    "on-click": "wlogout -b 6 -T 400 -B 400"
+  }
+}

@@ -1,0 +1,58 @@
+/* Catppuccin Mocha */
+@define-color base   #1e1e2e;
+@define-color mantle #181825;
+@define-color crust  #11111b;
+@define-color text   #cdd6f4;
+@define-color subtext0 #a6adc8;
+@define-color lavender #b4befe;
+@define-color mauve    #cba6f7;
+@define-color red      #f38ba8;
+@define-color green    #a6e3a1;
+
+* {
+  border: none;
+  font-family: "JetBrainsMono Nerd Font";
+  font-size: 14px;
+  color: @text;
+}
+
+window#waybar {
+  background: rgba(30, 30, 46, 0.85);
+  border-radius: 0 0 16px 16px;
+}
+
+#workspaces button {
+  padding: 0 8px;
+  margin: 4px 2px;
+  border-radius: 12px;
+  background: @mantle;
+  transition: all 0.2s ease;
+}
+
+#workspaces button.active {
+  background: @lavender;
+  color: @base;
+}
+
+#workspaces button:hover {
+  background: @mauve;
+  color: @base;
+}
+
+#cpu, #memory, #network, #pulseaudio, #battery, #clock,
+#tray, #custom-launch, #custom-power {
+  padding: 0 12px;
+  margin: 4px 2px;
+  border-radius: 12px;
+  background: @mantle;
+}
+
+#custom-power {
+  background: @red;
+  color: @crust;
+}
+
+/* 托盘图标微调 */
+#tray > * {
+  padding: 0 4px;
+}
