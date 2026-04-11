@@ -108,6 +108,44 @@ create_snapshot() {
     read -p "按 Enter 键返回菜单..."
 }
 
+# 解析快照编号输入，支持空格、逗号和范围
+parse_snapshot_selection() {
+    local input="$1"
+    local normalized_input token start end snapshot_id
+    local -A seen_ids=()
+
+    PARSED_SNAPSHOT_IDS=()
+    INVALID_SNAPSHOT_TOKENS=()
+
+    normalized_input=$(echo "$input" | tr ',' ' ')
+
+    for token in $normalized_input; do
+        if [[ $token =~ ^[0-9]+-[0-9]+$ ]]; then
+            start=${token%-*}
+            end=${token#*-}
+
+            if (( start > end )); then
+                INVALID_SNAPSHOT_TOKENS+=("$token")
+                continue
+            fi
+
+            for ((snapshot_id = start; snapshot_id <= end; snapshot_id++)); do
+                if [[ -z ${seen_ids[$snapshot_id]} ]]; then
+                    PARSED_SNAPSHOT_IDS+=("$snapshot_id")
+                    seen_ids[$snapshot_id]=1
+                fi
+            done
+        elif [[ $token =~ ^[0-9]+$ ]]; then
+            if [[ -z ${seen_ids[$token]} ]]; then
+                PARSED_SNAPSHOT_IDS+=("$token")
+                seen_ids[$token]=1
+            fi
+        else
+            INVALID_SNAPSHOT_TOKENS+=("$token")
+        fi
+    done
+}
+
 # 删除快照
 delete_snapshot() {
     echo -e "\n${BLUE}[删除快照]${NC}"
@@ -117,36 +155,82 @@ delete_snapshot() {
     sudo snapper -c "$SNAPPER_CONFIG" list --columns number,date,description | tail -n +2 | head -20
     
     echo ""
-    read -p "请输入要删除的快照编号: " snapshot_id
-    
-    if [ -z "$snapshot_id" ]; then
+    read -p "请输入要删除的快照编号（支持 12 15 18-25 或 12,15,18-25）: " snapshot_input
+
+    if [ -z "$snapshot_input" ]; then
         echo -e "${RED}错误: 未输入编号${NC}"
         read -p "按 Enter 键返回..."
         return
     fi
-    
-    # 检查快照是否存在
-    if ! sudo snapper -c "$SNAPPER_CONFIG" list | grep -q "^[[:space:]]*$snapshot_id "; then
-        echo -e "${RED}错误: 快照 #$snapshot_id 不存在${NC}"
+
+    parse_snapshot_selection "$snapshot_input"
+
+    if [ ${#INVALID_SNAPSHOT_TOKENS[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 以下输入格式无效: ${INVALID_SNAPSHOT_TOKENS[*]}${NC}"
         read -p "按 Enter 键返回..."
         return
     fi
-    
-    # 获取快照信息
-    snapshot_info=$(sudo snapper -c "$SNAPPER_CONFIG" list | grep "^[[:space:]]*$snapshot_id ")
-    description=$(echo "$snapshot_info" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}')
-    
-    echo -e "\n${YELLOW}即将删除:${NC}"
-    echo -e "  编号: ${RED}#$snapshot_id${NC}"
-    echo -e "  描述: $description"
+
+    if [ ${#PARSED_SNAPSHOT_IDS[@]} -eq 0 ]; then
+        echo -e "${RED}错误: 未解析出有效编号${NC}"
+        read -p "按 Enter 键返回..."
+        return
+    fi
+
+    snapshot_data=$(sudo snapper -c "$SNAPPER_CONFIG" --csvout --separator $'\t' --no-headers list --columns number,type,date,description)
+    valid_snapshot_ids=()
+    missing_snapshot_ids=()
+
+    for snapshot_id in "${PARSED_SNAPSHOT_IDS[@]}"; do
+        if [ "$snapshot_id" = "0" ]; then
+            missing_snapshot_ids+=("$snapshot_id")
+            continue
+        fi
+
+        snapshot_info=$(echo "$snapshot_data" | awk -F'\t' -v target="$snapshot_id" '$1 == target {print; exit}')
+
+        if [ -n "$snapshot_info" ]; then
+            valid_snapshot_ids+=("$snapshot_id")
+        else
+            missing_snapshot_ids+=("$snapshot_id")
+        fi
+    done
+
+    if [ ${#missing_snapshot_ids[@]} -gt 0 ]; then
+        echo -e "${YELLOW}以下快照不存在或不可删除，已跳过: ${missing_snapshot_ids[*]}${NC}"
+    fi
+
+    if [ ${#valid_snapshot_ids[@]} -eq 0 ]; then
+        echo -e "${RED}错误: 没有可删除的快照${NC}"
+        read -p "按 Enter 键返回..."
+        return
+    fi
+
+    echo -e "\n${YELLOW}即将删除以下 ${#valid_snapshot_ids[@]} 个快照:${NC}"
+    printf "${YELLOW}%-6s %-12s %-28s %s${NC}\n" "编号" "类型" "创建时间" "描述"
+    echo "-----------------------------------------------------------------------"
+
+    for snapshot_id in "${valid_snapshot_ids[@]}"; do
+        snapshot_info=$(echo "$snapshot_data" | awk -F'\t' -v target="$snapshot_id" '$1 == target {print; exit}')
+        IFS=$'\t' read -r num type date_str description <<< "$snapshot_info"
+
+        case "$type" in
+            "single") color="$GREEN" ;;
+            "pre") color="$CYAN" ;;
+            "post") color="$BLUE" ;;
+            *) color="$NC" ;;
+        esac
+
+        printf "${color}%-6s %-12s %-28s %s${NC}\n" "$num" "$type" "$date_str" "$description"
+    done
     
     echo ""
-    read -p "确认删除此快照？(y/n): " -n 1 -r
+    read -p "确认删除这些快照？(y/n): " -n 1 -r
     echo
     
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if sudo snapper -c "$SNAPPER_CONFIG" delete "$snapshot_id"; then
-            echo -e "\n${GREEN}✓ 快照 #$snapshot_id 已删除${NC}"
+        if sudo snapper -c "$SNAPPER_CONFIG" delete "${valid_snapshot_ids[@]}"; then
+            echo -e "\n${GREEN}✓ 已删除 ${#valid_snapshot_ids[@]} 个快照: ${valid_snapshot_ids[*]}${NC}"
         else
             echo -e "\n${RED}✗ 删除失败！${NC}"
         fi
