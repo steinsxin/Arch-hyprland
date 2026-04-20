@@ -16,6 +16,9 @@ NC='\033[0m' # No Color
 
 # 配置
 SNAPPER_CONFIG="system"  # 改为你的配置名称
+AUTO_SNAPSHOT_KEEP=3
+AUTO_SNAPSHOT_CLEANUP="timeline"
+AUTO_CLEANUP_ON_START=true
 
 # 检查 snapper 配置
 check_config() {
@@ -43,12 +46,13 @@ show_menu() {
     echo -e "${PURPLE}║${NC}  ${GREEN}1${NC}) 列出所有快照                       ${PURPLE}║${NC}"
     echo -e "${PURPLE}║${NC}  ${GREEN}2${NC}) 创建新快照                         ${PURPLE}║${NC}"
     echo -e "${PURPLE}║${NC}  ${GREEN}3${NC}) 删除快照                           ${PURPLE}║${NC}"
-    echo -e "${PURPLE}║${NC}  ${GREEN}4${NC}) 更新 GRUB 菜单                     ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║${NC}  ${GREEN}4${NC}) 清理自动快照（保留最新 3 个）      ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║${NC}  ${GREEN}5${NC}) 更新 GRUB 菜单                     ${PURPLE}║${NC}"
     echo -e "${PURPLE}║${NC}  ${GREEN}0${NC}) 退出                               ${PURPLE}║${NC}"
     echo -e "${PURPLE}║${NC}                                        ${PURPLE}║${NC}"
     echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}"
     echo ""
-    echo -ne "${YELLOW}请选择操作 [0-4]: ${NC}"
+    echo -ne "${YELLOW}请选择操作 [0-5]: ${NC}"
 }
 
 # 列出快照
@@ -57,11 +61,11 @@ list_snapshots() {
     echo -e "${CYAN}                    Snapper 快照列表${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
     
-    printf "${YELLOW}%-6s %-12s %-28s %s${NC}\n" "编号" "类型" "创建时间" "描述"
-    echo "-----------------------------------------------------------------------"
+    printf "${YELLOW}%-6s %-12s %-10s %-24s %s${NC}\n" "编号" "类型" "清理策略" "创建时间" "描述"
+    echo "--------------------------------------------------------------------------------"
     
-    sudo snapper -c "$SNAPPER_CONFIG" --csvout --separator $'\t' --no-headers list --columns number,type,date,description |
-    while IFS=$'\t' read -r num type date_str desc; do
+    sudo snapper -c "$SNAPPER_CONFIG" --csvout --separator $'\t' --no-headers list --columns number,type,cleanup,date,description |
+    while IFS=$'\t' read -r num type cleanup date_str desc; do
         # 根据类型设置颜色
         case "$type" in
             "single") color="$GREEN" ;;
@@ -69,8 +73,12 @@ list_snapshots() {
             "post") color="$BLUE" ;;
             *) color="$NC" ;;
         esac
+
+        if [ -z "$cleanup" ]; then
+            cleanup="manual"
+        fi
         
-        printf "${color}%-6s %-12s %-28s %s${NC}\n" "$num" "$type" "$date_str" "$desc"
+        printf "${color}%-6s %-12s %-10s %-24s %s${NC}\n" "$num" "$type" "$cleanup" "$date_str" "$desc"
     done
     
     # 显示统计
@@ -144,6 +152,93 @@ parse_snapshot_selection() {
             INVALID_SNAPSHOT_TOKENS+=("$token")
         fi
     done
+}
+
+# 收集自动快照（timeline）信息
+collect_auto_snapshots() {
+    local snapshot_data num type cleanup date_str desc
+
+    AUTO_SNAPSHOT_IDS=()
+    AUTO_SNAPSHOT_DATES=()
+    AUTO_SNAPSHOT_DESCRIPTIONS=()
+
+    snapshot_data=$(sudo snapper -c "$SNAPPER_CONFIG" --csvout --separator $'\t' --no-headers list --columns number,type,cleanup,date,description | sort -t $'\t' -k1,1n)
+
+    while IFS=$'\t' read -r num type cleanup date_str desc; do
+        [ -n "$num" ] || continue
+
+        if [ "$type" = "single" ] && [ "$cleanup" = "$AUTO_SNAPSHOT_CLEANUP" ]; then
+            AUTO_SNAPSHOT_IDS+=("$num")
+            AUTO_SNAPSHOT_DATES+=("$date_str")
+            AUTO_SNAPSHOT_DESCRIPTIONS+=("$desc")
+        fi
+    done <<< "$snapshot_data"
+}
+
+# 清理自动快照，仅保留最新 N 个 timeline 快照
+cleanup_auto_snapshots() {
+    local mode="${1:-interactive}"
+    local total_auto delete_count i
+    local delete_ids=()
+
+    collect_auto_snapshots
+    total_auto=${#AUTO_SNAPSHOT_IDS[@]}
+
+    if [ "$mode" = "interactive" ]; then
+        echo -e "\n${BLUE}[清理自动快照]${NC}"
+        echo -e "${CYAN}当前仅会清理 cleanup=${AUTO_SNAPSHOT_CLEANUP} 的 single 快照${NC}"
+    fi
+
+    if (( total_auto <= AUTO_SNAPSHOT_KEEP )); then
+        echo -e "${GREEN}当前自动快照共 ${total_auto} 个，无需清理${NC}"
+
+        if [ "$mode" = "interactive" ]; then
+            echo ""
+            read -p "按 Enter 键返回菜单..."
+        fi
+
+        return
+    fi
+
+    delete_count=$(( total_auto - AUTO_SNAPSHOT_KEEP ))
+
+    for ((i = 0; i < delete_count; i++)); do
+        delete_ids+=("${AUTO_SNAPSHOT_IDS[$i]}")
+    done
+
+    if [ "$mode" = "interactive" ]; then
+        echo -e "\n${YELLOW}检测到 ${total_auto} 个自动快照，将删除较旧的 ${delete_count} 个，仅保留最新 ${AUTO_SNAPSHOT_KEEP} 个:${NC}"
+        printf "${YELLOW}%-6s %-24s %s${NC}\n" "编号" "创建时间" "描述"
+        echo "-----------------------------------------------------------------------"
+
+        for ((i = 0; i < delete_count; i++)); do
+            printf "${CYAN}%-6s %-24s %s${NC}\n" "${AUTO_SNAPSHOT_IDS[$i]}" "${AUTO_SNAPSHOT_DATES[$i]}" "${AUTO_SNAPSHOT_DESCRIPTIONS[$i]}"
+        done
+
+        echo ""
+        read -p "确认删除这些自动快照？(y/n): " -n 1 -r
+        echo
+
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "\n${YELLOW}已取消清理${NC}"
+            echo ""
+            read -p "按 Enter 键返回菜单..."
+            return
+        fi
+    else
+        echo -e "${YELLOW}检测到 ${total_auto} 个自动快照，正在仅保留最新 ${AUTO_SNAPSHOT_KEEP} 个...${NC}"
+    fi
+
+    if sudo snapper -c "$SNAPPER_CONFIG" delete "${delete_ids[@]}"; then
+        echo -e "${GREEN}✓ 已删除 ${delete_count} 个自动快照: ${delete_ids[*]}${NC}"
+    else
+        echo -e "${RED}✗ 自动快照清理失败${NC}"
+    fi
+
+    if [ "$mode" = "interactive" ]; then
+        echo ""
+        read -p "按 Enter 键返回菜单..."
+    fi
 }
 
 # 删除快照
@@ -289,6 +384,10 @@ main() {
     
     # 检查配置
     check_config
+
+    if [ "$AUTO_CLEANUP_ON_START" = true ]; then
+        cleanup_auto_snapshots auto
+    fi
     
     # 主循环
     while true; do
@@ -306,6 +405,9 @@ main() {
                 delete_snapshot
                 ;;
             4)
+                cleanup_auto_snapshots
+                ;;
+            5)
                 update_grub_menu
                 ;;
             0)
